@@ -1,0 +1,735 @@
+MetData <- write.table(x, "clipboard", sep="\t", row.names=FALSE)
+unloadNamespace(plyr)
+unloadNamespace (dplyr)
+
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(devtools)
+library(naniar)
+library(stats)
+library(datasets)
+library(data.table)
+library(janitor)
+library(multcompView)
+library(dslabs)
+
+#setwd("O:/phd/PLCs/metabolomic data/20211if max van hooren ara leaf finish/010 workspace")
+##########################################
+#data prep
+###########
+MetData <- read.csv("For_in_R_PLCtogether.csv", header = TRUE)
+MetData2 <- as_tibble(MetData)
+############# Average different genotypes and treatments
+#put data in tidy format
+moltenMetData <- melt(data = MetData2, id.vars = c("Unique","Genotype","treatment","Genotype_treatment","certainty"))
+moltenMetData$value <- as.numeric(as.character(moltenMetData$value))
+
+#get rid of NA values in NA data.
+moltenMetData2 <- moltenMetData %>% drop_na(value)
+#do anaova test
+moltenMetData2$Genotype_treatment <- factor(moltenMetData2$Genotype_treatment)
+####################################################### filteren op minimaal 6 samples   
+#moltenMetData2 <- moltenMetData2 %>% filter(moltenMetData2$certainty == "YES")    - I checked all the samples
+
+
+#niet naar blankos kijken
+moltenMetData2 <- moltenMetData2 %>% 
+  group_by(treatment, variable) %>% 
+  filter(treatment != "blank")
+
+#all data
+moltenMetData5 <- moltenMetData2
+
+#nu filteren op genoeg samples per vergelijking.
+moltenMetData2 <- moltenMetData2 %>% 
+  group_by(Genotype_treatment, variable) %>% 
+  filter(n() >= 4)
+
+##########################################
+#Check distribution
+###########
+
+
+## check distribution
+norm_check <- moltenMetData2 %>% group_by(variable) %>% summarise('mean'= mean(value), "stdv" = sd(value))
+ggplot(norm_check, aes(mean, stdv)) + geom_point()
+ggsave("distribution.png", plot = last_plot())
+ggplot(norm_check, aes(mean, stdv)) + geom_point() + scale_x_log10() + scale_y_log10()
+ggsave("distribution_log_scale.png", plot = last_plot())
+moltenMetData2$log_value <- log10(moltenMetData2$value)
+norm_check_log <- moltenMetData2 %>% group_by(variable) %>% summarise('mean'= mean(log_value), "stdv" = sd(log_value))
+ggplot(norm_check_log, aes(mean, stdv)) + geom_point()
+ggsave("distribution_log transformed.png", plot = last_plot())
+
+####check normal distribution
+#normal data
+moltenMetData2_nest <- moltenMetData2 %>% group_by(variable) %>% nest()
+moltenMetData2_nest <- moltenMetData2_nest %>%
+  mutate(p_value = map(.x = data, .f = ~shapiro.test(.x$value)$p.value))
+moltenMetData2_nest <- moltenMetData2_nest %>% unnest(p_value)
+moltenMetData2_nest$p_value <- (moltenMetData2_nest$p_value)
+moltenMetData2_nest_sig <- moltenMetData2_nest %>% filter(p_value < 0.05)
+moltenMetData2_nest_nosig <- moltenMetData2_nest %>% filter(p_value > 0.05)
+
+#log transform only non significant data.
+moltenMetData2_nest_nosig <- moltenMetData2_nest_nosig %>%
+  mutate(log_p_value = map(.x = data, .f = ~shapiro.test(.x$log_value)$p.value))
+moltenMetData2_nest_nosig <- moltenMetData2_nest_nosig %>% unnest(log_p_value)
+moltenMetData2_nest_nosig$log_p_value <- (moltenMetData2_nest_nosig$log_p_value)
+
+#log transformed data
+moltenMetData2_nest <- moltenMetData2_nest %>%
+  mutate(log_p_value = map(.x = data, .f = ~shapiro.test(.x$log_value)$p.value))
+moltenMetData2_nest <- moltenMetData2_nest %>% unnest(log_p_value)
+moltenMetData2_nest$log_p_value <- (moltenMetData2_nest$log_p_value)
+moltenMetData2_nest_log_sig <- moltenMetData2_nest %>% filter(log_p_value < 0.05)
+moltenMetData2_nest_log_nosig <- moltenMetData2_nest %>% filter(log_p_value > 0.05)
+
+#log transform data with KS test = Kolmogorov-Smirnov
+moltenMetData2_nest <- moltenMetData2_nest %>%
+  mutate(KS_log_p_value = map(.x = data, .f = ~ks.test(.x$log_value, "pnorm", mean=mean(.x$log_value), sd=sd(.x$log_value))$p.value))
+moltenMetData2_nest <- moltenMetData2_nest %>% unnest(KS_log_p_value)
+moltenMetData2_nest$KS_log_p_value <- (moltenMetData2_nest$KS_log_p_value)
+moltenMetData2_nest_KS_log_sig <- moltenMetData2_nest %>% filter(KS_log_p_value < 0.05)
+moltenMetData2_nest_KS_log_nosig <- moltenMetData2_nest %>% filter(KS_log_p_value > 0.05)
+
+
+
+distribution_test <- as.data.frame(moltenMetData2_nest$variable)
+distribution_test$metabolites <- distribution_test$`moltenMetData2_nest$variable`
+distribution_test$`moltenMetData2_nest$variable` <- NULL
+distribution_test$distribution_log_pvalue <- moltenMetData2_nest$log_p_value
+distribution_test$distribution_KS_log_pvalue <- moltenMetData2_nest$KS_log_p_value
+#distribution_test$distribution_pvalue <- moltenMetData2_nest$p_value
+
+
+
+moltenMetData2$value2 <- moltenMetData2$value
+
+moltenMetData2$value <- moltenMetData2$log_value
+
+
+
+
+
+
+
+###########################################
+#TUKEY test and results in a new dataframe
+###########
+##Woehoe it works
+####
+metabolites <- unique(moltenMetData2$variable)
+## control vs drought
+rm(Drought_WT_Control_WT_TUKEYres)
+rm(Drought_PLC_Control_PLC_TUKEYres)
+
+## control vs control
+rm(Control_WT_Control_PLC_TUKEYres)
+
+## drought vs drought
+rm(Drought_WT_Drought_PLC_TUKEYres)
+
+## control vs drought
+Drought_WT_Control_WT_TUKEYres<-data.frame("metabolites"=character(0))
+Drought_PLC_Control_PLC_TUKEYres<-data.frame("metabolites"=character(0))
+
+## control vs control
+Control_WT_Control_PLC_TUKEYres<-data.frame("metabolites"=character(0))
+
+## drought vs drought
+Drought_WT_Drought_PLC_TUKEYres<-data.frame("metabolites"=character(0))
+
+x <- "X876"
+
+for (x in metabolites)  {
+  rm(res.aov)
+  rm(results.aov)
+  rm(TUKEY)
+  rm(df)
+  rm(df2)
+  res.aov <- moltenMetData2 %>% filter(variable == x)
+  
+  ################### if there are 2 different treatment conditions left over, do a two way anova. But otherwise do a 1-way anova
+  
+  if (as.numeric(length(unique(res.aov$treatment))) == 2){
+    #####################2way anova
+    tryCatch({
+      results.aov <- aov(value ~ Genotype*treatment, data = res.aov)
+    }, error=function(e){})
+    #do Tukey test
+    tryCatch({
+      TUKEY <- TukeyHSD(x=results.aov, conf.level=0.95)
+    }, error=function(e){})
+    #get Tukey results into a dataframe. 
+    tryCatch({
+      df <- as.data.frame(TUKEY[["Genotype:treatment"]])
+    }, error=function(e){})
+    tryCatch({
+      df2 <- cbind(as.data.frame(rownames(df)),df)
+    }, error=function(e){})
+    if(length(df2$diff) == 0) {
+      df2<-data.frame("rownames(df)"=character(0),"diff"=numeric(0),"lwr"=numeric(0),"upr"=numeric(0),"p adj"=numeric(0))
+    }
+    ## add data to sheets
+    temp_Drought_WT_Control_WT_TUKEYres <- as.data.frame(x)
+    temp_Drought_WT_Control_WT_TUKEYres$metabolites <- x
+    temp_Drought_WT_Control_WT_TUKEYres$x <- NULL
+    rm(Te)
+    tryCatch({
+      Te <- df2 %>% filter(df2$`rownames(df)` == "WT:drought-WT:control")
+    }, error=function(e){})
+    if(length(Te$`p adj`) == 0) {
+      temp_Drought_WT_Control_WT_TUKEYres$`P-value_DWT_CWT` <- 7654
+    } else {temp_Drought_WT_Control_WT_TUKEYres$`P-value_DWT_CWT` <- Te$`p adj`}
+    Drought_WT_Control_WT_TUKEYres <- bind_rows(temp_Drought_WT_Control_WT_TUKEYres, Drought_WT_Control_WT_TUKEYres)
+    
+    temp_Drought_PLC_Control_PLC_TUKEYres <- as.data.frame(x)
+    temp_Drought_PLC_Control_PLC_TUKEYres$metabolites <- x
+    temp_Drought_PLC_Control_PLC_TUKEYres$x <- NULL
+    rm(Te)
+    tryCatch({
+      Te <- df2 %>% filter(df2$`rownames(df)` == "PLC:drought-PLC:control")
+    }, error=function(e){})
+    if(length(Te$`p adj`) == 0) {
+      temp_Drought_PLC_Control_PLC_TUKEYres$`P-value_D_C` <- 7654
+    } else {temp_Drought_PLC_Control_PLC_TUKEYres$`P-value_D_C` <- Te$`p adj`}
+    Drought_PLC_Control_PLC_TUKEYres <- bind_rows(temp_Drought_PLC_Control_PLC_TUKEYres, Drought_PLC_Control_PLC_TUKEYres)
+    
+    ###############################################################Control vs control
+    temp_Control_WT_Control_PLC_TUKEYres <- as.data.frame(x)
+    temp_Control_WT_Control_PLC_TUKEYres$metabolites <- x
+    temp_Control_WT_Control_PLC_TUKEYres$x <- NULL
+    rm(Te)
+    tryCatch({
+      Te <- df2 %>% filter(df2$`rownames(df)` == "WT:control-PLC:control")
+    }, error=function(e){})
+    if(length(Te$`p adj`) == 0) {
+      temp_Control_WT_Control_PLC_TUKEYres$`P-value_CWT_C` <- 7654
+    } else {temp_Control_WT_Control_PLC_TUKEYres$`P-value_CWT_C` <- Te$`p adj`}
+    Control_WT_Control_PLC_TUKEYres <- bind_rows(temp_Control_WT_Control_PLC_TUKEYres, Control_WT_Control_PLC_TUKEYres)
+    
+    ################################################################drought vs drought
+    temp_Drought_WT_Drought_PLC_TUKEYres <- as.data.frame(x)
+    temp_Drought_WT_Drought_PLC_TUKEYres$metabolites <- x
+    temp_Drought_WT_Drought_PLC_TUKEYres$x <- NULL
+    rm(Te)
+    tryCatch({
+      Te <- df2 %>% filter(df2$`rownames(df)` == "WT:drought-PLC:drought")
+    }, error=function(e){})
+    if(length(Te$`p adj`) == 0) {
+      temp_Drought_WT_Drought_PLC_TUKEYres$`P-value_DWT_D` <- 7654
+    } else {temp_Drought_WT_Drought_PLC_TUKEYres$`P-value_DWT_D` <- Te$`p adj`}
+    Drought_WT_Drought_PLC_TUKEYres <- bind_rows(temp_Drought_WT_Drought_PLC_TUKEYres, Drought_WT_Drought_PLC_TUKEYres)
+    
+    
+  } else {
+    tryCatch({
+      results.aov <- aov(value ~ Genotype_treatment, data = res.aov)
+    }, error=function(e){})
+    #do Tukey test
+    tryCatch({
+      TUKEY <- TukeyHSD(x=results.aov, conf.level=0.95)
+    }, error=function(e){})
+    #get Tukey results into a dataframe. 
+    tryCatch({
+      df <- as.data.frame(TUKEY[["Genotype_treatment"]])
+    }, error=function(e){})
+    tryCatch({
+      df2 <- cbind(as.data.frame(rownames(df)),df)
+    }, error=function(e){})
+    if(length(df2$diff) == 0) {
+      df2<-data.frame("rownames(df)"=character(0),"diff"=numeric(0),"lwr"=numeric(0),"upr"=numeric(0),"p adj"=numeric(0))
+    }
+    
+    
+    #take specific comparrisons and add them to a new dataframe.
+    
+    ######################################################################################################drought vs control
+    temp_Drought_WT_Control_WT_TUKEYres <- as.data.frame(x)
+    temp_Drought_WT_Control_WT_TUKEYres$metabolites <- x
+    temp_Drought_WT_Control_WT_TUKEYres$x <- NULL
+    rm(Te)
+    tryCatch({
+      Te <- df2 %>% filter(df2$`rownames(df)` == "drought_WT-control_WT")
+    }, error=function(e){})
+    if(length(Te$`p adj`) == 0) {
+      temp_Drought_WT_Control_WT_TUKEYres$`P-value_DWT_CWT` <- 7654
+    } else {temp_Drought_WT_Control_WT_TUKEYres$`P-value_DWT_CWT` <- Te$`p adj`}
+    Drought_WT_Control_WT_TUKEYres <- bind_rows(temp_Drought_WT_Control_WT_TUKEYres, Drought_WT_Control_WT_TUKEYres)
+    
+    temp_Drought_PLC_Control_PLC_TUKEYres <- as.data.frame(x)
+    temp_Drought_PLC_Control_PLC_TUKEYres$metabolites <- x
+    temp_Drought_PLC_Control_PLC_TUKEYres$x <- NULL
+    rm(Te)
+    tryCatch({
+      Te <- df2 %>% filter(df2$`rownames(df)` == "drought_PLC-control_PLC")
+    }, error=function(e){})
+    if(length(Te$`p adj`) == 0) {
+      temp_Drought_PLC_Control_PLC_TUKEYres$`P-value_D_C` <- 7654
+    } else {temp_Drought_PLC_Control_PLC_TUKEYres$`P-value_D_C` <- Te$`p adj`}
+    Drought_PLC_Control_PLC_TUKEYres <- bind_rows(temp_Drought_PLC_Control_PLC_TUKEYres, Drought_PLC_Control_PLC_TUKEYres)
+    
+    
+    ###############################################################Control vs control
+    temp_Control_WT_Control_PLC_TUKEYres <- as.data.frame(x)
+    temp_Control_WT_Control_PLC_TUKEYres$metabolites <- x
+    temp_Control_WT_Control_PLC_TUKEYres$x <- NULL
+    rm(Te)
+    tryCatch({
+      Te <- df2 %>% filter(df2$`rownames(df)` == "control_WT-control_PLC")
+    }, error=function(e){})
+    if(length(Te$`p adj`) == 0) {
+      temp_Control_WT_Control_PLC_TUKEYres$`P-value_CWT_C` <- 7654
+    } else {temp_Control_WT_Control_PLC_TUKEYres$`P-value_CWT_C` <- Te$`p adj`}
+    Control_WT_Control_PLC_TUKEYres <- bind_rows(temp_Control_WT_Control_PLC_TUKEYres, Control_WT_Control_PLC_TUKEYres)
+    
+    ################################################################drought vs drought
+    temp_Drought_WT_Drought_PLC_TUKEYres <- as.data.frame(x)
+    temp_Drought_WT_Drought_PLC_TUKEYres$metabolites <- x
+    temp_Drought_WT_Drought_PLC_TUKEYres$x <- NULL
+    rm(Te)
+    tryCatch({
+      Te <- df2 %>% filter(df2$`rownames(df)` == "drought_WT-drought_PLC")
+    }, error=function(e){})
+    if(length(Te$`p adj`) == 0) {
+      temp_Drought_WT_Drought_PLC_TUKEYres$`P-value_DWT_D` <- 7654
+    } else {temp_Drought_WT_Drought_PLC_TUKEYres$`P-value_DWT_D` <- Te$`p adj`}
+    Drought_WT_Drought_PLC_TUKEYres <- bind_rows(temp_Drought_WT_Drought_PLC_TUKEYres, Drought_WT_Drought_PLC_TUKEYres)
+    }}
+
+
+###########################################
+#Here differential levels
+###########
+moltenMetData3 <- moltenMetData2
+moltenMetData3$Unique.identifier <- NULL
+moltenMetData3$certainty <- NULL
+moltenMetData3$Genotype <- NULL
+moltenMetData3$Treatment <- NULL
+grouped_moltenMetData <- moltenMetData3 %>% group_by(value2) %>% summarise('mean(value2)'= mean(value2))
+grouped_moltenMetData3 <- moltenMetData3 %>% group_by(Genotype_treatment, variable) %>% summarise(mean(value2))
+
+rm(Control_vs_drought)
+rm(Control_vs_control)
+rm(drought_vs_drought)
+rm(more_than_nothing_control)
+rm(more_than_nothing_drought)
+Control_vs_drought<-data.frame("metabolites"=character(0),"CWT_vs_DWT"=numeric(0),"C_vs_D"=numeric(0))
+Control_vs_control<-data.frame("metabolites"=character(0),"CWT_vs_C"=numeric(0))
+drought_vs_drought<-data.frame("metabolites"=character(0),"DWT_vs_D"=numeric(0))
+more_than_nothing_control <-data.frame("metabolites"=character(0),"more_then_nothing"=character(0))
+more_than_nothing_drought <-data.frame("metabolites"=character(0),"more_then_nothing"=character(0))
+
+for (y in metabolites) {
+  rm(CWT)
+  rm(C)
+  rm(DWT)
+  rm(D)
+  
+  CWT <- grouped_moltenMetData3 %>% filter(variable == y) %>% filter(Genotype_treatment == "control_WT") 
+  CWT <- CWT$`mean(value2)`
+  C <- grouped_moltenMetData3 %>% filter(variable == y) %>% filter(Genotype_treatment == "control_PLC") 
+  C <- C$`mean(value2)`
+  
+  DWT <- grouped_moltenMetData3 %>% filter(variable == y) %>% filter(Genotype_treatment == "drought_WT") 
+  DWT <- DWT$`mean(value2)`
+  D <- grouped_moltenMetData3 %>% filter(variable == y) %>% filter(Genotype_treatment == "drought_PLC") 
+  D <- D$`mean(value2)`
+  
+  temp_Control_vs_drought <- as.data.frame(y)
+  temp_Control_vs_drought$metabolites <- y
+  temp_Control_vs_drought$y <- NULL
+  
+  tryCatch({
+    temp_Control_vs_drought$CWT_vs_DWT <- DWT/CWT
+  }, error=function(e){})
+  if(length(DWT) == 0) {temp_Control_vs_drought$CWT_vs_DWT <- 7654}
+  if(length(CWT) == 0) {temp_Control_vs_drought$CWT_vs_DWT <- 7654}
+  
+  tryCatch({
+    temp_Control_vs_drought$C_vs_D <- D/C
+  }, error=function(e){})
+  if(length(D) == 0) {temp_Control_vs_drought$C_vs_D <- 7654}
+  if(length(C) == 0) {temp_Control_vs_drought$C_vs_D <- 7654}
+  
+  Control_vs_drought <- bind_rows(temp_Control_vs_drought, Control_vs_drought)
+  #######################################################################################################  
+  temp_Control_vs_control <- as.data.frame(y)
+  temp_Control_vs_control$metabolites <- y
+  temp_Control_vs_control$y <- NULL
+  
+  tryCatch({
+    temp_Control_vs_control$CWT_vs_C <- C/CWT
+  }, error=function(e){})
+  if(length(CWT) == 0) {temp_Control_vs_control$CWT_vs_C <- 7654}
+  if(length(C) == 0) {temp_Control_vs_control$CWT_vs_C <- 7654}
+  
+  Control_vs_control <- bind_rows(temp_Control_vs_control, Control_vs_control)
+  ######################################################################################################################  
+  temp_drought_vs_drought <- as.data.frame(y)
+  temp_drought_vs_drought$metabolites <- y
+  temp_drought_vs_drought$y <- NULL
+  
+  tryCatch({
+    temp_drought_vs_drought$DWT_vs_D <- D/DWT
+  }, error=function(e){})
+  if(length(DWT) == 0) {temp_drought_vs_drought$DWT_vs_D <- 7654}
+  if(length(D) == 0) {temp_drought_vs_drought$DWT_vs_D <- 7654}
+  
+  drought_vs_drought <- bind_rows(temp_drought_vs_drought, drought_vs_drought)
+
+}
+##################
+# More than nothing
+#################
+moltenMetData6 <- moltenMetData5
+moltenMetData6$Unique.identifier <- NULL
+moltenMetData6$certainty <- NULL
+moltenMetData6$Genotype <- NULL
+moltenMetData6$Treatment <- NULL
+moltenMetData6$value2 <- moltenMetData6$value
+grouped_moltenMetData <- moltenMetData6 %>% group_by(value2) %>% summarise('mean(value2)'= mean(value2))
+grouped_moltenMetData6 <- moltenMetData6 %>% group_by(Genotype_treatment, variable) %>% summarise(mean(value2))
+
+rm(more_than_nothing_control)
+rm(more_than_nothing_drought)
+more_than_nothing_control <-data.frame("metabolites"=character(0),"more_then_nothing"=character(0))
+more_than_nothing_drought <-data.frame("metabolites"=character(0),"more_then_nothing"=character(0))
+
+for (y in metabolites) {
+  rm(CWT)
+  rm(C)
+  rm(DWT)
+  rm(D)
+  
+  CWT <- grouped_moltenMetData6 %>% filter(variable == y) %>% filter(Genotype_treatment == "control_WT") 
+  CWT <- CWT$`mean(value2)`
+  C <- grouped_moltenMetData6 %>% filter(variable == y) %>% filter(Genotype_treatment == "control_PLC") 
+  C <- C$`mean(value2)`
+  
+  DWT <- grouped_moltenMetData6 %>% filter(variable == y) %>% filter(Genotype_treatment == "drought_WT") 
+  DWT <- DWT$`mean(value2)`
+  D <- grouped_moltenMetData6 %>% filter(variable == y) %>% filter(Genotype_treatment == "drought_PLC") 
+  D <- D$`mean(value2)`
+  
+  controls <- c(C)
+  droughts <- c(D)
+  
+  more_than_nothing_control_temp <- as.data.frame(y)
+  more_than_nothing_control_temp$metabolites <- y
+  more_than_nothing_control_temp$y <- NULL
+  if (length(CWT) == 0) {
+    if (sum(controls) > 0 ){
+      more_than_nothing_control_temp$more_then_nothing <- "YES"
+    } else more_than_nothing_control_temp$more_then_nothing <- "NO"
+  } else more_than_nothing_control_temp$more_then_nothing <- "NA"
+  
+  if (sum(controls) == 0 ) {
+    if (length(CWT) == 1 ){
+      more_than_nothing_control_temp$more_then_nothing <- "YES"
+    } 
+  }
+  more_than_nothing_control <- rbind(more_than_nothing_control, more_than_nothing_control_temp)
+  
+  more_than_nothing_drought_temp <- as.data.frame(y)
+  more_than_nothing_drought_temp$metabolites <- y
+  more_than_nothing_drought_temp$y <- NULL
+  if (length(DWT) == 0) {
+    if (sum(droughts) > 0){
+      more_than_nothing_drought_temp$more_then_nothing <- "YES"
+    } else more_than_nothing_drought_temp$more_then_nothing <- "NO"
+  } else more_than_nothing_drought_temp$more_then_nothing <- "NA"
+  
+  if (sum(droughts) == 0 ) {
+    if (length(DWT) == 1 ){
+      more_than_nothing_control_temp$more_then_nothing <- "YES"
+    } 
+  }
+  more_than_nothing_drought <- rbind(more_than_nothing_drought, more_than_nothing_drought_temp)
+}
+##########
+#putting things together
+#########
+
+
+Control_vs_drought <- merge(Control_vs_drought, Drought_WT_Control_WT_TUKEYres, by="metabolites",all = TRUE)
+Control_vs_drought <- merge(Control_vs_drought, Drought_PLC_Control_PLC_TUKEYres, by="metabolites",all = TRUE)
+Control_vs_drought <- merge(Control_vs_drought, distribution_test, by="metabolites",all = TRUE)
+
+Control_vs_control <- merge(Control_vs_control, more_than_nothing_control, by="metabolites", all = TRUE)
+Control_vs_control <- merge(Control_vs_control, Control_WT_Control_PLC_TUKEYres, by="metabolites", all = TRUE)
+Control_vs_control <- merge(Control_vs_control, distribution_test, by="metabolites", all = TRUE)
+
+drought_vs_drought <- merge(drought_vs_drought, more_than_nothing_drought, by="metabolites", all = TRUE)
+drought_vs_drought <- merge(drought_vs_drought, Drought_WT_Drought_PLC_TUKEYres, by="metabolites", all = TRUE)
+drought_vs_drought <- merge(drought_vs_drought, distribution_test, by="metabolites", all = TRUE)
+
+#drought_vs_drought <- read.csv("root_log_met_drought_vs_drought.csv", header = TRUE)
+#Control_vs_control <- read.csv("root_log_met_Control_vs_control.csv", header = TRUE)
+#Control_vs_drought <- read.csv("root_log_met_Control_vs_drought.csv", header = TRUE)
+
+#drought_vs_drought$distribution_log_pvalue <- NULL
+#Control_vs_control$distribution_log_pvalue <- NULL
+#Control_vs_drought$distribution_log_pvalue <- NULL
+
+write.csv(drought_vs_drought, 'shoot_PLConly_log_met_drought_vs_drought.csv')
+write.csv(Control_vs_control, 'shoot_PLConly_log_met_Control_vs_control.csv')
+write.csv(Control_vs_drought, 'shoot_PLConly_log_met_Control_vs_drought.csv')
+
+
+
+
+
+##########################################
+#making graphs of every metabolite that is annotated.
+###########
+Annotated_list <- Annotated_list <- read_csv("Annotated_list.csv")
+Annotated_list_variable <- Annotated_list$Variable
+
+i <- "X1251"
+#loop over de numbers in the list, and extract the data for that metabolite 
+
+dir.create(file.path("graphs_PLCtogether"))
+dir.create(file.path("graphs_PLCtogether","bars"))
+dir.create(file.path("graphs_PLCtogether","boxplots"))
+dir.create(file.path("graphs_PLCtogether","normalized_WT_bars"))
+dir.create(file.path("graphs_PLCtogether","normalized_WT_log_bars"))
+dir.create(file.path("graphs_PLCtogether","normalized_Control_bars"))
+dir.create(file.path("graphs_PLCtogether","normalized_Control_log_bars"))
+
+rm(Molten5_normal_Wt_together)
+Molten5_normal_Wt_together<-data.frame("Genotype"=factor(0), "treatment"=factor(0),"Genotype_treatment"=factor(0),"data"=factor(0),"value_mean"=factor(0),"log_value_mean"=factor(0),"Annotate"=factor(0))
+
+
+sapply(Molten5_Normal_WT_nest, class)
+
+
+for (i in Annotated_list_variable){
+  name_graph <- Annotated_list %>% filter(Annotated_list$Variable == i)  
+  name=paste(name_graph$name,name_graph$Variable, sep = "_")
+  Box_name.png=paste(name,"_Box", ".png", sep = "")
+  Bar_name.png=paste(name,"_Bar", ".png", sep = "")
+  normalized_WT_Bar_name.png=paste(name, "_normalized_WT_Bar", ".png", sep = "")
+  normalized_WT_log_Bar_name.png=paste(name, "_normalized_WT_log_Bar", ".png", sep = "")
+  normalized_control_Bar_name.png=paste(name, "_normalized_control_Bar", ".png", sep = "")
+  normalized_Control_log_bars.png=paste(name, "_normalized_control_log_Bar", ".png", sep = "")
+  
+  Select_moltenmetadata5 <- moltenMetData5 %>% filter(variable == i)
+  
+  #add empty sheet here
+  Genotypes_empty <- read.csv("Genotypes_empty.csv", header = TRUE)
+  Select_moltenmetadata5 <- bind_rows(Select_moltenmetadata5,Genotypes_empty)
+  
+  MeanWTC <- Select_moltenmetadata5 %>% filter(Genotype_treatment == "control_WT") 
+  MeanWTC <- mean(MeanWTC$value, na.rm=TRUE) 
+  Molten5_control <- Select_moltenmetadata5 %>% filter(treatment == "control")
+  Molten5_control$value <- Molten5_control$value / MeanWTC
+  MeanWTD <- Select_moltenmetadata5 %>% filter(Genotype_treatment == "drought_WT") 
+  MeanWTD <- mean(MeanWTD$value, na.rm=TRUE) 
+  Molten5_drought <- Select_moltenmetadata5 %>% filter(treatment == "drought")
+  Molten5_drought$value <- Molten5_drought$value / MeanWTD
+  Molten5_Normal_WT <- bind_rows(Molten5_control,Molten5_drought)
+  ###Log scale fold change
+  Molten5_Normal_WT_nest <- Molten5_Normal_WT %>% group_by(Genotype_treatment, Genotype, treatment) %>% nest()
+  Molten5_Normal_WT_nest <- Molten5_Normal_WT_nest %>%
+    mutate(value_mean = map(.x = data, .f = ~mean(.x$value, na.rm = T)))
+  Molten5_Normal_WT_nest <- Molten5_Normal_WT_nest %>% unnest(value_mean)
+  Molten5_Normal_WT_nest$log_value_mean <- log2(Molten5_Normal_WT_nest$value_mean)
+  
+  
+  Together <-Molten5_Normal_WT_nest
+  Together$data <- NULL
+  Together$Annotate <- name
+  Together <- Together %>% filter(Genotype == "PLC")
+  Together <- Together %>% drop_na(value_mean)
+  All_together <- rbind(All_together, Together)
+}
+
+write.csv(All_together, 'PLC_log_WT_together.csv')
+
+z <-All_together %>%
+  ggplot(aes(x=Annotate, y=log_value_mean, fill=treatment))  
+  geom_bar(stat = "identity", position = 'dodge')  
+  scale_x_discrete(limits=c("PLC")) +
+  scale_fill_manual(values=c("#9b9a97", "#df9e2d"))+
+  labs(title=name,x="",y="Log fold change compared to WT")+
+  theme_light() +
+  theme(text = element_text(size = 24))+
+  theme(legend.position="none")
+
+
+
+
+
+
+for (i in Annotated_list_variable){
+  name_graph <- Annotated_list %>% filter(Annotated_list$Variable == i)  
+  name=paste(name_graph$name,name_graph$Variable, sep = "_")
+  Box_name.png=paste(name,"_Box", ".png", sep = "")
+  Bar_name.png=paste(name,"_Bar", ".png", sep = "")
+  normalized_WT_Bar_name.png=paste(name, "_normalized_WT_Bar", ".png", sep = "")
+  normalized_WT_log_Bar_name.png=paste(name, "_normalized_WT_log_Bar", ".png", sep = "")
+  normalized_control_Bar_name.png=paste(name, "_normalized_control_Bar", ".png", sep = "")
+  normalized_Control_log_bars.png=paste(name, "_normalized_control_log_Bar", ".png", sep = "")
+  
+  
+  Select_moltenmetadata5 <- moltenMetData5 %>% filter(variable == i)
+  
+  #add empty sheet here
+  Genotypes_empty <- read.csv("Genotypes_empty.csv", header = TRUE)
+  Select_moltenmetadata5 <- bind_rows(Select_moltenmetadata5,Genotypes_empty)
+  
+  MeanWTC <- Select_moltenmetadata5 %>% filter(Genotype_treatment == "control_WT") 
+  MeanWTC <- mean(MeanWTC$value, na.rm=TRUE) 
+  Molten5_control <- Select_moltenmetadata5 %>% filter(treatment == "control")
+  Molten5_control$value <- Molten5_control$value / MeanWTC
+  MeanWTD <- Select_moltenmetadata5 %>% filter(Genotype_treatment == "drought_WT") 
+  MeanWTD <- mean(MeanWTD$value, na.rm=TRUE) 
+  Molten5_drought <- Select_moltenmetadata5 %>% filter(treatment == "drought")
+  Molten5_drought$value <- Molten5_drought$value / MeanWTD
+  Molten5_Normal_WT <- bind_rows(Molten5_control,Molten5_drought)
+  
+  #write.csv2(Molten5_Normal_WT, 'Molten5_Normal_WT.csv')
+  #Molten5_Normal_WT <- read.csv("Molten5_Normal_WT.csv", header = TRUE)
+  p <- Molten5_Normal_WT %>% group_by(Genotype, treatment) %>%
+    summarise(mean = mean(value, na.rm = TRUE),
+              n = n(),
+              sd = sd(value, na.rm = TRUE)) %>%
+    mutate(sem = sd / sqrt(n - 1)) %>%
+    ggplot(aes(x=Genotype, y=mean, fill=treatment)) + 
+    geom_bar(stat = "identity", position = 'dodge') + 
+    geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), position=position_dodge(width=0.9),width = 0.5)+
+    scale_x_discrete(limits=c("WT", "PLC")) +
+    scale_y_continuous(limits = c(0, NA),expand = expansion(mult = c(0, 0.1))) +
+    scale_fill_manual(values=c("#9b9a97", "#df9e2d"))+
+    labs(title=name,x="",y="normalized to WT")+
+    theme_light() +
+    theme(text = element_text(size = 24))+
+    theme(legend.position="none")
+  
+  ggsave(file.path("graphs_PLCtogether/normalized_WT_bars",normalized_WT_log_Bar_name.png), plot = p)
+  
+  ###Log scale fold change
+  Molten5_Normal_WT_nest <- Molten5_Normal_WT %>% group_by(Genotype_treatment, Genotype, treatment) %>% nest()
+  Molten5_Normal_WT_nest <- Molten5_Normal_WT_nest %>%
+    mutate(value_mean = map(.x = data, .f = ~mean(.x$value, na.rm = T)))
+  Molten5_Normal_WT_nest <- Molten5_Normal_WT_nest %>% unnest(value_mean)
+  Molten5_Normal_WT_nest$log_value_mean <- log2(Molten5_Normal_WT_nest$value_mean)
+  
+  Molten5_Normal_WT_nest$Annotate <- name_graph
+  Together <-Molten5_Normal_WT_nest
+  Together$data <- NULL
+  Together <- Together %>% drop_na(value_mean)
+  All_together <- rbind(All_together, Together)
+  
+  s <-Molten5_Normal_WT_nest %>% group_by(Genotype, treatment) %>%
+    summarise(mean = mean(log_value_mean, na.rm = TRUE),
+              n = n(),
+              sd = sd(log_value_mean, na.rm = TRUE)) %>%
+    mutate(sem = sd / sqrt(n - 1)) %>%
+    ggplot(aes(x=Genotype, y=mean, fill=treatment)) + 
+    geom_bar(stat = "identity", position = 'dodge') + 
+    geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), position=position_dodge(width=0.9),width = 0.5)+
+    scale_x_discrete(limits=c("PLC")) +
+    scale_fill_manual(values=c("#9b9a97", "#df9e2d"))+
+    labs(title=name,x="",y="Log fold change compared to WT")+
+    theme_light() +
+    theme(text = element_text(size = 24))+
+    theme(legend.position="none")
+  
+  ggsave(file.path("graphs_PLCtogether/normalized_WT_log_bars",normalized_WT_log_Bar_name.png), plot = s)
+  
+  ##################
+  
+  
+  MeanWT <- Select_moltenmetadata5 %>% filter(Genotype_treatment == "control_WT") 
+  MeanWT <- mean(MeanWT$value, na.rm=TRUE) 
+  Molten5_WT <- Select_moltenmetadata5 %>% filter(Genotype == "WT")
+  Molten5_WT$value <- Molten5_WT$value / MeanWT
+  MeanPLC <- Select_moltenmetadata5 %>% filter(Genotype_treatment == "control_PLC") 
+  MeanPLC <- mean(MeanPLC$value, na.rm=TRUE) 
+  Molten5_PLC <- Select_moltenmetadata5 %>% filter(Genotype == "PLC")
+  Molten5_PLC$value <- Molten5_PLC$value / MeanPLC
+  Molten5_Normal_Control <- bind_rows(Molten5_WT,Molten5_PLC)
+  
+  Molten5_Normal_Control <- Molten5_Normal_Control %>% filter(treatment != "control")
+  u <- Molten5_Normal_Control %>% group_by(Genotype, treatment) %>%
+    summarise(mean = mean(value, na.rm = TRUE),
+              n = n(),
+              sd = sd(value, na.rm = TRUE)) %>%
+    mutate(sem = sd / sqrt(n - 1)) %>%
+    ggplot(aes(x=Genotype, y=mean, fill=treatment)) + 
+    geom_bar(stat = "identity", position = 'dodge') + 
+    geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), position=position_dodge(width=0.9),width = 0.5)+
+    scale_x_discrete(limits=c("WT", "PLC")) +
+    scale_y_continuous(limits = c(0, NA),expand = expansion(mult = c(0, 0.1))) +
+    scale_fill_manual(values=c("#df9e2d"))+
+    labs(title=name,x="",y="normalized to control")+
+    theme_light() +
+    theme(text = element_text(size = 24))+
+    theme(legend.position="none")
+  ggsave(file.path("graphs_PLCtogether/normalized_Control_bars",normalized_control_Bar_name.png), plot = u)
+  
+  ###Log scale fold change
+  Molten5_Normal_Control_nest <- Molten5_Normal_Control %>% group_by(Genotype_treatment, Genotype, treatment) %>% nest()
+  Molten5_Normal_Control_nest <- Molten5_Normal_Control_nest %>%
+    mutate(value_mean = map(.x = data, .f = ~mean(.x$value, na.rm = T)))
+  Molten5_Normal_Control_nest <- Molten5_Normal_Control_nest %>% unnest(value_mean)
+  Molten5_Normal_Control_nest$log_value_mean <- log2(Molten5_Normal_Control_nest$value_mean)
+  
+  Molten5_Normal_Control_nest <- Molten5_Normal_Control_nest %>% filter(treatment != "control")
+  v <- Molten5_Normal_Control_nest %>% group_by(Genotype, treatment) %>%
+    summarise(mean = mean(log_value_mean, na.rm = TRUE),
+              n = n(),
+              sd = sd(log_value_mean, na.rm = TRUE)) %>%
+    mutate(sem = sd / sqrt(n - 1)) %>%
+    ggplot(aes(x=Genotype, y=mean, fill=treatment)) + 
+    geom_bar(stat = "identity", position = 'dodge') + 
+    geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), position=position_dodge(width=0.9),width = 0.5)+
+    scale_x_discrete(limits=c("WT", "PLC")) +
+    scale_fill_manual(values=c("#df9e2d"))+
+    labs(title=name,x="",y="Log fold change compared to Control")+
+    theme_light() +
+    theme(text = element_text(size = 24))+
+    theme(legend.position="none")
+  
+  ggsave(file.path("graphs_PLCtogether/normalized_Control_log_bars",normalized_Control_log_bars.png), plot = v)
+  
+  
+  
+  max <- max(Select_moltenmetadata5$value, na.rm = TRUE)  
+  Select_moltenmetadata5$value <- Select_moltenmetadata5$value / max *100
+  
+  q <- ggplot(Select_moltenmetadata5, aes(x=Genotype, y=value, fill=treatment)) + 
+    geom_boxplot() +
+    scale_x_discrete(limits=c("WT", "PLC")) +
+    scale_fill_manual(values=c("#9b9a97", "#df9e2d")) +
+    labs(title=name,x="",y="scaled amounts")+
+    theme_light() +
+    theme(text = element_text(size = 24))+
+    theme(legend.position="none")
+  ggsave(file.path("graphs_PLCtogether/boxplots",Box_name.png), plot = q) 
+  
+  r <- Select_moltenmetadata5 %>% group_by(Genotype, treatment) %>%
+    summarise(mean = mean(value, na.rm = TRUE),
+              n = n(),
+              sd = sd(value, na.rm = TRUE)) %>%
+    mutate(sem = sd / sqrt(n - 1)) %>%
+    ggplot(aes(x=Genotype, y=mean, fill=treatment)) + 
+    geom_bar(stat = "identity", position = 'dodge') + 
+    geom_errorbar(aes(ymin=mean-sem, ymax=mean+sem), position=position_dodge(width=0.9),width = 0.5)+
+    scale_x_discrete(limits=c("WT", "PLC")) +
+    scale_y_continuous(limits = c(0, NA),expand = expansion(mult = c(0, 0.1))) +
+    scale_fill_manual(values=c("#9b9a97", "#df9e2d"))+
+    labs(title=name,x="",y="Scaled amounts")+
+    theme_light() +
+    theme(text = element_text(size = 24))+
+    theme(legend.position="none")
+  
+  ggsave(file.path("graphs_PLCtogether/bars",Bar_name.png), plot = r)
+  
+  
+}
