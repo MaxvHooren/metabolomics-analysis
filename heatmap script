@@ -1,0 +1,185 @@
+######## 
+#package install
+#######
+install.packages("VIM")
+install.packages("naniar")
+install.packages("missMDA")
+install.packages("Amelia")
+install.packages("mice")
+install.packages("devtools")
+install.packages("https://cran.r-project.org/src/contrib/Archive/randomForest/randomForest_4.6-14.tar.gz", repos = NULL, type="source", method="curl")
+install.packages("missForest", method="curl")
+install.packages("FactoMineR")
+#######
+#library loading
+#######
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(devtools)
+library(naniar)
+library(stats)
+library(datasets)
+library(data.table)
+library(janitor)
+
+library(multcompView)
+library(dslabs)
+library(pheatmap)
+
+
+library(VIM)
+library(naniar)
+library(missMDA)
+library(Amelia)
+library(mice)
+library(missForest)
+library(FactoMineR)
+library(ggfortify)
+
+
+
+.
+#make a dendogram with all samples XXXXXXXX
+
+#pheatmap heatmap with dendogram from earlier graph.
+
+setwd("O:/phd/PLCs/metabolomic data")
+#setwd("D:/phd doc/surfdrive/Documents/PLCs/metabolomic data/04 20242if max van hooren shoot exp 2/04 20242if max van hooren shoot exp 2")
+setwd("D:/phd doc/surfdrive/Documents/PLCs/metabolomic data/20232if  max van hooren ara root tips/20232if  max van hooren ara root tips/010 workspace")
+
+
+Annotated_heatmap_data <- read.csv("Annotated heatmap data.csv", header = TRUE)
+
+Annotated_heatmap_data <- Annotated_heatmap_data%>% filter(Annotated_heatmap_data$Class != "Internal Standard (Retention Time)")
+Annotated_heatmap_data <- Annotated_heatmap_data%>% filter(Annotated_heatmap_data$Class != "Reagent (Contamination)")
+Annotated_heatmap_data <- Annotated_heatmap_data%>% filter(Annotated_heatmap_data$Class != "Reagent Contamination (Aliphatic)")
+#Annotated_heatmap_data <- Annotated_heatmap_data%>% filter(Annotated_heatmap_data$Cluster_Number != "X2184")
+Annotated_heatmap_data_root <- Annotated_heatmap_data
+#Annotated_heatmap_data_shoot <- Annotated_heatmap_data
+#Annotated_heatmap_data <- Annotated_heatmap_data_shoot%>% filter(Annotated_heatmap_data_shoot$Class != "MSTs")
+Annotated_heatmap_data <- Annotated_heatmap_data_root%>% filter(Annotated_heatmap_data_root$Class != "MSTs")
+
+
+row_names <- Annotated_heatmap_data$Name
+rownames(Annotated_heatmap_data) <- row_names
+my_metabolites_col<- Annotated_heatmap_data$Name
+my_class_col <- as.data.frame(Annotated_heatmap_data$Class)
+colnames(my_class_col) <- "class"
+rownames(my_class_col) <- row_names
+Annotated_heatmap_data$Name <- NULL
+Annotated_heatmap_data$Class <- NULL
+Annotated_heatmap_data$Cluster_Number <- NULL
+Annotated_heatmap_data$Hit_At_Max_Match <- NULL
+Annotated_heatmap_data$treatment <- NULL
+Annotated_heatmap_data$tissue <- NULL
+Annotated_heatmap_data$new_name <- NULL
+
+
+my_colour = list(class = c(Acids = "#e31a1c",
+                           Alcohols = "#fb9a99",
+                           Amino_Acids = "#b2df8a",
+                           Fatty_Acids = "#cab2d6",
+                           Lipids = "#ffff99", 
+                           MSTs = "#b15928", 
+                           N_Compounds = "#33a02c",
+                           Phenylpropanoids = "#a6d854",
+                           Phosphates = "#6a3d9a",
+                           Polyhydroxy_Acids = "#1f78b4",
+                           Polyols = "#a6cee3",
+                           S_Compounds = "#ffd92f",
+                           Sugar_Conjugates = "#fdbf6f",
+                           Sugars = "#ff7f00"
+                           )
+                 )
+
+
+
+my_heatmap <- pheatmap(Annotated_heatmap_data,
+         #cluster_rows=FALSE,
+         cluster_cols=FALSE, cutree_rows = 10,
+         main = "Root annotated metabolites", 
+         scale = "row",
+         cellwidth = 8, cellheight = 6,   # changed to 3
+         fontsize = 8,
+         border_color="grey60",
+         annotation_row = my_class_col,
+         annotation_colors = my_colour
+         )
+my_heatmap
+
+save_pheatmap_png <- function(x, filename, width=2000, height=3000, res = 300) {
+  png(filename, width = width, height = height, res = res)
+  grid::grid.newpage()
+  grid::grid.draw(x$gtable)
+  dev.off()
+}
+
+
+save_pheatmap_png(my_heatmap, "Root_scaled_samples_annotated_heatmap2.png")
+
+
+#######
+##PCA plot
+#######
+
+#setwd("D:/phd doc/surfdrive/Documents/PLCs/metabolomic data/04 20242if max van hooren shoot exp 2/04 20242if max van hooren shoot exp 2")
+setwd("D:/phd doc/surfdrive/Documents/PLCs/metabolomic data/20232if  max van hooren ara root tips/20232if  max van hooren ara root tips/010 workspace")
+# PCA_data <- read.csv("PCA_plot_data_average.csv", header = TRUE) #shoot data
+PCA_data <- read.csv("PCA_data_average.csv", header = TRUE) #root data
+
+
+PCA_data_df <- PCA_data %>% 
+  select(where(~!any(is.na(.))))
+#PCA <- prcomp(PCA_data_df[,c(4:3212)],
+                   center = TRUE,
+                   scale. = TRUE)
+PCA <- prcomp(PCA_data_df[,c(4:997)],
+              center = TRUE,
+              scale. = TRUE)
+
+summary(PCA)
+pca.plot <- autoplot(PCA,
+                          data = PCA_data_df,
+                          colour = 'Genotype',
+                    shape = 'Treatment',
+                          size = 2.5
+                    )
+pca.plot
+
+pca.plot + theme_light() + scale_color_manual(values=c("#9b9a97", "#df9e2d"))
+
+
+
+pca.plot + theme_light() + theme(text = element_text(size = 24))
+
+
+
+###########
+PCA_data$Treatment_Genotype <- PCA_data$ï..Treatment_genotype
+PCA_data$ï..Treatment_genotype <- NULL
+PCA_df <- PCA_data %>% select(3:5438)
+empty_columns <- sapply(PCA_df, function(x) all(is.na(x) | x == ""))
+PCA_df2 <- PCA_df[, !empty_columns]
+PCA_df2 <- Filter(function(x)(length(unique(x))>10), PCA_df)
+nb <- estim_ncpPCA(PCA_df2,method.cv = "Kfold", verbose = FALSE)
+pca <- imputePCA(X = PCA_df2, ncp = 2, scale = TRUE, method = c("Regularized","EM"))
+X.pca <- pca$comp
+X.pca <- as.data.frame(X.pca)
+head(X.pca)
+autoplot(X.pca)
+ggplot(X.pca)
+
+
+PCA_df3 <- PCA_data %>% select(1:54)
+PCA_df3 <- PCA_data %>% group_by(Treatment_Genotype) %>% drop_na(value)
+
+#########
+moltenMetData2$value <- as.numeric(moltenMetData2$value)
+
+sapply(pca_fit,scale)
+
+pca_fit <- moltenMetData2 %>% 
+  select(where(is.numeric)) # retain only numeric columns
+  prcomp(scale = TRUE) # do PCA on scaled data
